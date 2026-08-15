@@ -59,6 +59,22 @@ class CombinedExpectation:
 
 
 @dataclass(frozen=True)
+class ExactlyOneExpectation:
+    parts: tuple[Expectation, ...]
+    requirements: tuple[CapabilityRequirement, ...] = ()
+
+    def evaluate(self, session: "GradingSession", criterion_id: str) -> ExpectationEvaluation:
+        diagnostics: list[Diagnostic] = []
+        evidence_ids: list[str] = []
+        results = [part.evaluate(session, criterion_id) for part in self.parts]
+        for result in results:
+            diagnostics.extend(result.diagnostics)
+            evidence_ids.extend(result.evidence_ids)
+        satisfied_count = sum(1 for result in results if result.satisfied)
+        return ExpectationEvaluation(satisfied=satisfied_count == 1, diagnostics=tuple(diagnostics), evidence_ids=tuple(evidence_ids))
+
+
+@dataclass(frozen=True)
 class FunctionSignatureExpectation:
     function_name: str
     parameter_types: tuple[type[Any], ...]
@@ -88,10 +104,11 @@ class FunctionSignatureExpectation:
         evidence_ids.append(evidence.id)
 
         if len(function.args.args) != len(self.parameter_types):
+            expected_word = "parameter" if len(self.parameter_types) == 1 else "parameters"
             diagnostics.append(
                 session.make_diagnostic(
                     "function-parameter-count",
-                    f"Function '{self.function_name}' expected {len(self.parameter_types)} parameters but found {len(function.args.args)}.",
+                    f"Function '{self.function_name}' expected {len(self.parameter_types)} {expected_word} but found {len(function.args.args)}.",
                     criterion_id,
                     category="student",
                 )
@@ -246,7 +263,16 @@ class OutputEqualsExpectation:
                 category="student_runtime",
             )
             return ExpectationEvaluation(False, (diagnostic,), (evidence.id,))
-        if record.returncode not in (0, None):
+        if record.returncode is None:
+            diagnostic = session.make_diagnostic(
+                "program-execution-invalid",
+                "Program execution returned an invalid state without a return code.",
+                criterion_id,
+                evidence_ids=(evidence.id,),
+                category="infrastructure",
+            )
+            return ExpectationEvaluation(False, (diagnostic,), (evidence.id,))
+        if record.returncode != 0:
             diagnostic = session.make_diagnostic(
                 "program-exception",
                 "Program exited with an exception before output validation.",
@@ -718,11 +744,9 @@ class CriterionBuilder:
         return self.add_expectation(combined)
 
     def exactly_one_of(self, *expectations: Expectation) -> Expectation:
-        # minimal v0.1 support via all_of(any_of, not both)
-        if len(expectations) != 2:
-            raise GraderDefinitionError("exactly_one_of currently supports exactly two expectations")
-        a, b = expectations
-        return self.add_expectation(CombinedExpectation(mode="any_of", parts=(a, b)))
+        if len(expectations) < 2:
+            raise GraderDefinitionError("exactly_one_of requires at least two expectations")
+        return self.add_expectation(ExactlyOneExpectation(parts=tuple(expectations)))
 
     def not_(self, expectation: Expectation) -> Expectation:
         wrapped = NegatedExpectation(expectation)

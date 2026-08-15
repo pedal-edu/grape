@@ -91,7 +91,7 @@ def double(value, other):
     result = grader.grade(submission)
     assert result.score.earned == 0
     messages = "\n".join(d.message for d in result.diagnostics)
-    assert "expected 1 parameters" in messages
+    assert "expected 1 parameter" in messages
     assert "return annotation 'float'" in messages
 
 
@@ -223,6 +223,19 @@ def reverse_list(values):
     )
     result = grader.grade(submission)
     assert result.score.earned == 1
+
+
+def test_exactly_one_of_semantics() -> None:
+    grader = Grader(id="xor", total_points=1)
+    with grader.criterion("xor", points=1) as c:
+        e1 = OutputEqualsExpectation(expected_output="A\n")
+        e2 = OutputEqualsExpectation(expected_output="B\n")
+        c.exactly_one_of(e1, e2)
+
+    a_result = grader.grade(Submission.from_source("print('A')\n"))
+    both_result = grader.grade(Submission.from_source("print('A')\nprint('B')\n"))
+    assert a_result.score.earned == 1
+    assert both_result.score.earned == 0
 
 
 def test_student_tests_capability_fails_during_compile() -> None:
